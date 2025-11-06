@@ -18,6 +18,6 @@ class GenerativeImageDataset(Dataset):
         img = decode_image(img_path)
         img = img/torch.max(img)
 
-        noise = torch.randn_like(img)
+        noise = torch.rand_like(img)
         
         return img, noise
