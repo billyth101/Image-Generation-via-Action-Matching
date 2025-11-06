@@ -51,25 +51,31 @@ class MLP(nn.Module):
         dx, dt = torch.autograd.grad(y, (x, t), create_graph=True)
         return dx, dt
     
-    def action_loss(self, batch_0, batch_1, timeline):
+    def action_loss(self, img_batch, noise_batch, timeline):
 
         #boundary terms
-        x_0, t_0 = batch_0['image'], batch_0['time']
-        x_1, t_1 = batch_1['image'], batch_1['time']
-
-        boundary_term = self.forward(x_0, t_0) - self.forward(x_1, t_1)
+        boundary_term = torch.mean(self.forward(img_batch, torch.tensor(0)) - self.forward(noise_batch, torch.tensor(1)))
 
         #intermediate terms
+        time_steps = 0
 
-        # TODO: implement integration estimation for evolution
-        
-        dsdx = self.derivative_dsdx(x_inter, t_inter)
-        dsdt = self.derivative_dsdt(x_inter, t_inter)
+        for i, t in enumerate(timeline):
 
-        C = torch.sum(dsdx**2, dim=1, keepdim=True)/2
-        D = dsdt
+            inter = t*img_batch + (1-t)*noise_batch
 
-        return torch.mean(boundary_term + C + D)
+            t_vec = t.expand(img_batch.shape[0], 1)
+
+            dsdx = self.derivative_dsdx(inter, t_vec)
+            dsdt = self.derivative_dsdt(inter, t_vec)
+
+            step = torch.mean(torch.sum(dsdx**2, dim=1, keepdim=True)/2 + dsdt)
+
+            time_steps += step
+
+        # Monte Carlo integral approximation:
+        time_term = time_steps/timeline.shape[0]
+
+        return torch.mean(boundary_term + time_term)
     
         
     
