@@ -46,33 +46,33 @@ class MLP(nn.Module):
         d = torch.autograd.grad(y, t_, create_graph= True)[0]
         return d
     
-    # def action_loss(self, img_batch, noise_batch, timeline):
-
-    #     #boundary terms
-    #     boundary_term = torch.mean(self.forward(img_batch, torch.tensor(0)) - self.forward(noise_batch, torch.tensor(1)))
-
-    #     #intermediate terms
-    #     time_steps = 0
-
-    #     for t in timeline:
-
-    #         inter = t*img_batch + (1-t)*noise_batch
-
-    #         t_vec = t.expand(img_batch.shape[0], 1)
-
-    #         dsdx = self.derivative_dsdx(inter, t_vec)
-    #         dsdt = self.derivative_dsdt(inter, t_vec)
-
-    #         step = torch.mean(torch.sum(dsdx**2, dim=1, keepdim=True)/2 + dsdt)
-
-    #         time_steps += step
-
-    #     # Monte Carlo integral approximation:
-    #     time_term = time_steps/timeline.shape[0]
-
-    #     return torch.mean(boundary_term + time_term)
-    
     def action_loss(self, img_batch, noise_batch, timeline):
+
+        #boundary terms
+        boundary_term = torch.mean(self.forward(noise_batch, torch.tensor(0)) - self.forward(img_batch, torch.tensor(1)) )
+
+        #intermediate terms
+        time_steps = 0
+
+        for t in timeline:
+
+            inter = t*img_batch + (1-t)*noise_batch
+
+            t_vec = t.expand(img_batch.shape[0], 1)
+
+            dsdx = self.derivative_dsdx(inter, t_vec)
+            dsdt = self.derivative_dsdt(inter, t_vec)
+
+            step = torch.mean(torch.sum(dsdx**2, dim=1, keepdim=True)/2 + dsdt)
+
+            time_steps += step
+
+        # Monte Carlo integral approximation:
+        time_term = time_steps/timeline.shape[0]
+
+        return torch.mean(boundary_term + time_term)
+    
+    def action_loss_2(self, img_batch, noise_batch, timeline):
         """
         Assumes t=0 -> noise, t=1 -> data.
         Monte Carlo integral is averaged over the provided timeline points.
@@ -91,7 +91,7 @@ class MLP(nn.Module):
         # ---- build all interpolates for all t in one go ----
         # shapes: (K, B, D)
         t_grid = timeline.to(device).view(K, 1, 1)
-        inter  = (1.0 - t_grid) * noise_batch.unsqueeze(0) + t_grid * img_batch.unsqueeze(0)
+        inter  = t_grid * img_batch.unsqueeze(0) + (1.0 - t_grid) * noise_batch.unsqueeze(0)
 
         # flatten to big batch: (K*B, D)
         inter_flat = inter.reshape(K * B, D)
@@ -102,22 +102,20 @@ class MLP(nn.Module):
         t_big.requires_grad_(True)
 
         # ---- single forward over all (x,t) ----
-        out = self.forward(inter_flat, t_big)  # (K*B, 1)
+        out = torch.sum(self.forward(inter_flat, t_big)) # (K*B, 1)
 
         # ---- single autograd call to get both grads ----
-        ones = torch.ones_like(out)
         dsdx, dsdt = torch.autograd.grad(
             outputs=out,
             inputs=(inter_flat, t_big),
-            grad_outputs=ones,
             create_graph=True,
-            retain_graph=False,
-            allow_unused=False
         )
 
         # integrand: 0.5*||∇_x s||^2 + ∂_t s
         # result per-sample, then mean over all K*B
-        integrand = 0.5 * (dsdx.pow(2).sum(dim=1)) + dsdt.squeeze(1)
+        Arndt = dsdt.squeeze(1)
+        Billy = (dsdx**2).sum(dim=1)
+        integrand = 0.5 * ((dsdx**2).sum(dim=1)) + dsdt.squeeze(1)
         time_term = integrand.mean()  # already averages over K and B
 
         return boundary + time_term
